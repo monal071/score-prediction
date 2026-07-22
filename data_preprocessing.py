@@ -6,15 +6,38 @@ import numpy as np
 import pandas as pd
 
 
-def trim_data(df):
-    """Filters data for 2nd innings and computes features/target columns."""
+def trim_and_engineer_features(df):
+    """Filters data for 2nd innings and engineers rate and momentum features."""
     df_2nd = df[df["innings"] == 2].copy()
-    df_2nd["runs_left"] = df_2nd["runs_target"] - df_2nd["team_runs"]
+    
+    # Raw match metrics
+    runs_left_raw = (df_2nd["runs_target"] - df_2nd["team_runs"]).clip(lower=0)
+    balls_left_raw = (120 - df_2nd["team_balls"]).clip(lower=1)
+    team_balls_raw = df_2nd["team_balls"].clip(lower=1)
+
+    # Rates & pressure features
+    rrr_raw = (runs_left_raw * 6.0) / balls_left_raw
+    crr_raw = (df_2nd["team_runs"] * 6.0) / team_balls_raw
+    rrr_crr_diff_raw = rrr_raw - crr_raw
+
+    df_2nd["runs_left_raw"] = runs_left_raw
+    df_2nd["rrr_raw"] = rrr_raw
+    df_2nd["crr_raw"] = crr_raw
+    df_2nd["rrr_crr_diff_raw"] = rrr_crr_diff_raw
+    df_2nd["wickets_left_raw"] = 10 - df_2nd["team_wicket"]
+
+    # Rolling momentum over last 12 balls per match
+    df_2nd["runs_last_12"] = df_2nd.groupby("match_id")["team_runs"].diff(periods=12).fillna(df_2nd["team_runs"]).clip(lower=0)
+    df_2nd["wickets_last_12"] = df_2nd.groupby("match_id")["team_wicket"].diff(periods=12).fillna(df_2nd["team_wicket"]).clip(lower=0)
+
+    # Match outcome target (1 = win, 0 = loss)
     df_2nd["results"] = (df_2nd["match_won_by"] == df_2nd["batting_team"]).astype(int)
 
     columns_to_keep = [
         "match_id", "batting_team", "bowling_team", "venue", "batter", "bowler",
-        "runs_left", "team_balls", "team_wicket", "runs_target", "results"
+        "runs_left_raw", "team_balls", "team_wicket", "runs_target",
+        "rrr_raw", "crr_raw", "rrr_crr_diff_raw", "wickets_left_raw",
+        "runs_last_12", "wickets_last_12", "results"
     ]
 
     missing_cols = [col for col in columns_to_keep if col not in df_2nd.columns]
@@ -25,7 +48,7 @@ def trim_data(df):
 
 
 def normalize_and_encode(df2, df_raw):
-    """Encodes categorical features, normalizes numeric features, and saves mappings."""
+    """Encodes categorical features, normalizes continuous features, and exports metadata."""
     players = pd.unique(pd.concat([df_raw["batter"], df_raw["bowler"]], ignore_index=True).dropna())
     player_to_id = {name: idx + 1 for idx, name in enumerate(players)}
 
@@ -37,31 +60,42 @@ def normalize_and_encode(df2, df_raw):
     bowling_team_to_id = {name: idx + 1 for idx, name in enumerate(bowling_team_values)}
     venue_to_id = {name: idx + 1 for idx, name in enumerate(venue_values)}
 
-    df2["batter"] = df2["batter"].map(player_to_id).fillna(0)
-    df2["bowler"] = df2["bowler"].map(player_to_id).fillna(0)
-    df2["batting_team"] = df2["batting_team"].map(batting_team_to_id).fillna(0)
-    df2["bowling_team"] = df2["bowling_team"].map(bowling_team_to_id).fillna(0)
-    df2["venue"] = df2["venue"].map(venue_to_id).fillna(0)
+    # Categorical encodings (1-indexed integers)
+    df2["batter"] = df2["batter"].map(player_to_id).fillna(0).astype(int)
+    df2["bowler"] = df2["bowler"].map(player_to_id).fillna(0).astype(int)
+    df2["batting_team"] = df2["batting_team"].map(batting_team_to_id).fillna(0).astype(int)
+    df2["bowling_team"] = df2["bowling_team"].map(bowling_team_to_id).fillna(0).astype(int)
+    df2["venue"] = df2["venue"].map(venue_to_id).fillna(0).astype(int)
 
-    max_runs_target = float(df_raw["runs_target"].max()) if not df_raw.empty else 200.0
+    max_runs_target = float(df_raw["runs_target"].max()) if not df_raw.empty else 250.0
 
-    df2["runs_left"] = df2["runs_left"] / max_runs_target
-    df2["team_wicket"] = df2["team_wicket"] / 10.0
+    # Normalized continuous features
+    df2["runs_left"] = df2["runs_left_raw"] / max_runs_target
     df2["team_balls"] = df2["team_balls"] / 120.0
+    df2["team_wicket"] = df2["team_wicket"] / 10.0
+    df2["rrr"] = (df2["rrr_raw"] / 24.0).clip(lower=0, upper=2.0)
+    df2["crr"] = (df2["crr_raw"] / 24.0).clip(lower=0, upper=2.0)
+    df2["rrr_crr_diff"] = (df2["rrr_crr_diff_raw"] / 24.0).clip(lower=-2.0, upper=2.0)
+    df2["wickets_left"] = df2["wickets_left_raw"] / 10.0
+    df2["runs_last_12"] = (df2["runs_last_12"] / 36.0).clip(lower=0, upper=1.0)
+    df2["wickets_last_12"] = (df2["wickets_last_12"] / 5.0).clip(lower=0, upper=1.0)
 
-    # Ensure artifacts directory exists
     os.makedirs("artifacts", exist_ok=True)
 
-    # Save categorical mappings for downstream inference & Streamlit app
     mappings = {
         "player_to_id": player_to_id,
         "batting_team_to_id": batting_team_to_id,
         "bowling_team_to_id": bowling_team_to_id,
         "venue_to_id": venue_to_id,
+        "num_players": len(player_to_id),
+        "num_teams": len(batting_team_to_id),
+        "num_venues": len(venue_to_id),
         "max_runs_target": max_runs_target,
-        "feature_cols": [
-            "batting_team", "bowling_team", "venue", "batter", "bowler",
-            "runs_left", "team_balls", "team_wicket"
+        "cat_cols": ["batting_team", "bowling_team", "venue", "batter", "bowler"],
+        "num_cols": [
+            "runs_left", "team_balls", "team_wicket",
+            "rrr", "crr", "rrr_crr_diff", "wickets_left",
+            "runs_last_12", "wickets_last_12"
         ]
     }
 
@@ -84,9 +118,12 @@ def train_test_split_sequences(df2, sequence_length=20, random_seed=42, train_si
 
     split_index = int(len(match_ids) * train_size)
 
+    # 5 categorical + 9 continuous = 14 total features
     feature_cols = [
         "batting_team", "bowling_team", "venue", "batter", "bowler",
-        "runs_left", "team_balls", "team_wicket"
+        "runs_left", "team_balls", "team_wicket",
+        "rrr", "crr", "rrr_crr_diff", "wickets_left",
+        "runs_last_12", "wickets_last_12"
     ]
 
     for idx, match_id in enumerate(match_ids):
@@ -118,45 +155,19 @@ def train_test_split_sequences(df2, sequence_length=20, random_seed=42, train_si
     return X_train, X_test, y_train, y_test
 
 
-def download_from_kaggle(dataset_handle: str) -> str:
-    """Downloads dataset from Kaggle using kagglehub if available."""
-    try:
-        import kagglehub
-        print(f"Downloading Kaggle dataset: '{dataset_handle}' via kagglehub...")
-        path = kagglehub.dataset_download(dataset_handle)
-        csv_files = [os.path.join(path, f) for f in os.listdir(path) if f.endswith(".csv")]
-        if not csv_files:
-            raise FileNotFoundError(f"No CSV file found in downloaded Kaggle dataset at {path}")
-        print(f"Downloaded CSV: {csv_files[0]}")
-        return csv_files[0]
-    except ImportError:
-        raise ImportError(
-            "Package 'kagglehub' is required to download Kaggle datasets automatically.\n"
-            "Please run: pip install kagglehub"
-        )
-
-
 def main():
     parser = argparse.ArgumentParser(description="Preprocess IPL ball-by-ball dataset into LSTM sequence windows.")
-    parser.add_argument("--input", type=str, default="IPL.csv", help="Path or URL to input CSV dataset file (default: IPL.csv)")
-    parser.add_argument("--kaggle", type=str, default=None, help="Kaggle dataset handle (e.g. chaitu20/ipl-dataset2008-2025)")
+    parser.add_argument("--input", type=str, default="IPL.csv", help="Path to input CSV dataset file (default: IPL.csv)")
     args = parser.parse_args()
 
     dataset_path = args.input
 
-    if args.kaggle:
-        dataset_path = download_from_kaggle(args.kaggle)
-    elif not os.path.exists(dataset_path):
-        raise FileNotFoundError(
-            f"Dataset '{dataset_path}' not found.\n"
-            "Please place 'IPL.csv' in the project root or specify a dataset via:\n"
-            "  python data_preprocessing.py --input path/to/dataset.csv\n"
-            "  python data_preprocessing.py --kaggle chaitu20/ipl-dataset2008-2025"
-        )
+    if not os.path.exists(dataset_path):
+        raise FileNotFoundError(f"Dataset '{dataset_path}' not found.")
 
     df_raw = pd.read_csv(dataset_path, low_memory=False)
-    df_trimmed = trim_data(df_raw)
-    df_processed = normalize_and_encode(df_trimmed, df_raw)
+    df_engineered = trim_and_engineer_features(df_raw)
+    df_processed = normalize_and_encode(df_engineered, df_raw)
 
     sequence_length = 20
     random_seed = 42
@@ -176,11 +187,11 @@ def main():
     )
 
     print("Data Preprocessing Completed Successfully!")
-    print(f" - Dataset Source: {dataset_path}")
-    print(f" - X_train shape:   {X_train.shape}")
-    print(f" - X_test shape:    {X_test.shape}")
-    print(f" - y_train shape:   {y_train.shape}")
-    print(f" - y_test shape:    {y_test.shape}")
+    print(f" - Engineered 14 total features per ball (5 categorical + 9 rate/momentum continuous)")
+    print(f" - X_train shape: {X_train.shape}")
+    print(f" - X_test shape:  {X_test.shape}")
+    print(f" - y_train shape: {y_train.shape}")
+    print(f" - y_test shape:  {y_test.shape}")
 
 
 if __name__ == "__main__":

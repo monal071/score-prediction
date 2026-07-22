@@ -13,12 +13,13 @@ def main():
 
     processed_path = "artifacts/processed_data.npz"
     model_path = "artifacts/model.pt"
+    mappings_path = "artifacts/mappings.json"
 
-    if not os.path.exists(processed_path):
-        raise FileNotFoundError(f"'{processed_path}' not found. Please run 'python data_preprocessing.py' first.")
+    if not os.path.exists(processed_path) or not os.path.exists(model_path) or not os.path.exists(mappings_path):
+        raise FileNotFoundError("Required artifacts missing. Please run preprocessing and training first.")
 
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"'{model_path}' not found. Please run 'python train.py' first.")
+    with open(mappings_path, "r", encoding="utf-8") as f:
+        mappings = json.load(f)
 
     data = np.load(processed_path)
     X_test = data["X_test"]
@@ -29,10 +30,16 @@ def main():
 
     sample_idx = args.sample % len(X_test)
 
-    input_size = X_test.shape[2]
-    hidden_size = 64
+    num_players = mappings.get("num_players", 1000)
+    num_teams = mappings.get("num_teams", 30)
+    num_venues = mappings.get("num_venues", 100)
 
-    model = LSTMWinPredictor(input_size=input_size, hidden_size=hidden_size)
+    model = LSTMWinPredictor(
+        num_players=num_players,
+        num_teams=num_teams,
+        num_venues=num_venues,
+        hidden_size=48
+    )
     model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()
 
@@ -45,20 +52,15 @@ def main():
     pred_class = int(prob >= 0.5)
     win_pct = prob * 100.0
 
-    # Load mappings if available
-    mappings_path = "artifacts/mappings.json"
     batting_team = "Batting Team"
     bowling_team = "Bowling Team"
 
-    if os.path.exists(mappings_path):
-        with open(mappings_path, "r", encoding="utf-8") as f:
-            mappings = json.load(f)
-            id_to_team = {v: k for k, v in mappings.get("batting_team_to_id", {}).items()}
-            last_ball = X_test[sample_idx][-1]
-            bat_id = int(last_ball[0])
-            bowl_id = int(last_ball[1])
-            batting_team = id_to_team.get(bat_id, "Batting Team")
-            bowling_team = id_to_team.get(bowl_id, "Bowling Team")
+    id_to_team = {v: k for k, v in mappings.get("batting_team_to_id", {}).items()}
+    last_ball = X_test[sample_idx][-1]
+    bat_id = int(last_ball[0])
+    bowl_id = int(last_ball[1])
+    batting_team = id_to_team.get(bat_id, "Batting Team")
+    bowling_team = id_to_team.get(bowl_id, "Bowling Team")
 
     bar_len = 20
     filled = int(round(prob * bar_len))

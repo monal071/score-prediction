@@ -19,12 +19,13 @@ def get_device():
 def main():
     processed_path = "artifacts/processed_data.npz"
     model_path = "artifacts/model.pt"
+    mappings_path = "artifacts/mappings.json"
 
-    if not os.path.exists(processed_path):
-        raise FileNotFoundError(f"'{processed_path}' not found. Please run 'python data_preprocessing.py' first.")
+    if not os.path.exists(processed_path) or not os.path.exists(model_path) or not os.path.exists(mappings_path):
+        raise FileNotFoundError("Required artifacts missing. Please run preprocessing and training first.")
 
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"'{model_path}' not found. Please run 'python train.py' first.")
+    with open(mappings_path, "r", encoding="utf-8") as f:
+        mappings = json.load(f)
 
     data = np.load(processed_path)
     X_test = data["X_test"]
@@ -38,10 +39,17 @@ def main():
     test_dataset = TensorDataset(X_test_t, y_test_t)
     test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
 
-    input_size = X_test.shape[2]
-    hidden_size = 64
+    num_players = mappings.get("num_players", 1000)
+    num_teams = mappings.get("num_teams", 30)
+    num_venues = mappings.get("num_venues", 100)
 
-    model = LSTMWinPredictor(input_size=input_size, hidden_size=hidden_size).to(device)
+    model = LSTMWinPredictor(
+        num_players=num_players,
+        num_teams=num_teams,
+        num_venues=num_venues,
+        hidden_size=48
+    ).to(device)
+
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
@@ -83,14 +91,14 @@ def main():
     with open("artifacts/evaluation_metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
-    print("\n================ MODEL EVALUATION REPORT ================")
+    print("\n================ HIGH ACCURACY MODEL EVALUATION REPORT ================")
     print(f" Test Loss:        {metrics['test_loss']:.4f}")
     print(f" Test Accuracy:    {metrics['test_accuracy'] * 100:.2f}%")
     print(f" Test ROC-AUC:     {metrics['test_roc_auc']:.4f}")
     print(f" Test Precision:   {metrics['test_precision']:.4f}")
     print(f" Test Recall:      {metrics['test_recall']:.4f}")
     print(f" Test F1 Score:    {metrics['test_f1_score']:.4f}")
-    print("=========================================================\n")
+    print("========================================================================\n")
     print("Sample predicted probabilities (first 10):")
     for i, p in enumerate(y_test_prob[:10]):
         print(f" Sample {i+1:02d}: {p:.4f} (Actual: {int(y_test_true[i])})")

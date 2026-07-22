@@ -15,12 +15,20 @@ def get_device():
     return torch.device("cpu")
 
 
+def smooth_labels(y, smoothing=0.05):
+    """Applies label smoothing to binary targets."""
+    return y * (1.0 - smoothing) + 0.5 * smoothing
+
+
 def main():
     processed_path = "artifacts/processed_data.npz"
-    if not os.path.exists(processed_path):
-        raise FileNotFoundError(
-            f"'{processed_path}' not found. Please run 'python data_preprocessing.py' first."
-        )
+    mappings_path = "artifacts/mappings.json"
+
+    if not os.path.exists(processed_path) or not os.path.exists(mappings_path):
+        raise FileNotFoundError("Processed dataset or metadata mappings missing. Run 'python data_preprocessing.py' first.")
+
+    with open(mappings_path, "r", encoding="utf-8") as f:
+        mappings = json.load(f)
 
     data = np.load(processed_path)
     X_train = data["X_train"]
@@ -39,20 +47,31 @@ def main():
     train_dataset = TensorDataset(X_train_t, y_train_t)
     test_dataset = TensorDataset(X_test_t, y_test_t)
 
-    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
 
-    input_size = X_train_t.shape[2]
-    hidden_size = 64
+    num_players = mappings.get("num_players", 1000)
+    num_teams = mappings.get("num_teams", 30)
+    num_venues = mappings.get("num_venues", 100)
 
-    model = LSTMWinPredictor(input_size=input_size, hidden_size=hidden_size).to(device)
+    model = LSTMWinPredictor(
+        num_players=num_players,
+        num_teams=num_teams,
+        num_venues=num_venues,
+        hidden_size=48,
+        dropout=0.5
+    ).to(device)
+
     criterion = nn.BCELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=2, factor=0.5)
 
-    epochs = 15
+    epochs = 20
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
 
-    print(f"Starting model training for {epochs} epochs...")
+    print(f"Starting regularized model training for {epochs} epochs on {len(train_dataset)} sequence samples...")
+    best_val_loss = float("inf")
+
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
@@ -61,10 +80,11 @@ def main():
 
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
+            yb_smoothed = smooth_labels(yb, smoothing=0.05)
 
             optimizer.zero_grad()
             preds = model(xb)
-            loss = criterion(preds, yb)
+            loss = criterion(preds, yb_smoothed)
             loss.backward()
             optimizer.step()
 
@@ -96,6 +116,8 @@ def main():
         val_loss /= val_total
         val_acc = val_correct / val_total
 
+        scheduler.step(val_loss)
+
         history["train_loss"].append(epoch_loss)
         history["train_acc"].append(epoch_acc)
         history["val_loss"].append(val_loss)
@@ -103,17 +125,19 @@ def main():
 
         print(
             f"Epoch [{epoch + 1:02d}/{epochs:02d}] - "
-            f"Train Loss: {epoch_loss:.4f} | Train Acc: {epoch_acc:.4f} | "
-            f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}"
+            f"Train Loss: {epoch_loss:.4f} | Train Acc: {epoch_acc * 100:.2f}% | "
+            f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc * 100:.2f}%"
         )
 
-    os.makedirs("artifacts", exist_ok=True)
-    torch.save(model.state_dict(), "artifacts/model.pt")
-    
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            os.makedirs("artifacts", exist_ok=True)
+            torch.save(model.state_dict(), "artifacts/model.pt")
+
     with open("artifacts/training_history.json", "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)
 
-    print("Model successfully trained and saved to 'artifacts/model.pt'!")
+    print(f"Model successfully trained! Best Val Loss: {best_val_loss:.4f}")
 
 
 if __name__ == "__main__":

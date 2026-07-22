@@ -27,13 +27,6 @@ st.markdown("""
         padding: 15px;
         border: 1px solid #2e364f;
     }
-    .metric-card {
-        background: linear-gradient(135deg, #1e222d 0%, #171b26 100%);
-        border: 1px solid #2d3748;
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 15px;
-    }
     .win-badge {
         background-color: #10B981;
         color: white;
@@ -65,10 +58,16 @@ def load_model_and_mappings():
     with open(mappings_path, "r", encoding="utf-8") as f:
         mappings = json.load(f)
 
-    input_size = len(mappings["feature_cols"])
-    hidden_size = 64
+    num_players = mappings.get("num_players", 1000)
+    num_teams = mappings.get("num_teams", 30)
+    num_venues = mappings.get("num_venues", 100)
 
-    model = LSTMWinPredictor(input_size=input_size, hidden_size=hidden_size)
+    model = LSTMWinPredictor(
+        num_players=num_players,
+        num_teams=num_teams,
+        num_venues=num_venues,
+        hidden_size=48
+    )
     model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()
 
@@ -85,7 +84,7 @@ def load_processed_data():
 
 def main():
     st.title("🏏 Cricket Win Probability Estimator")
-    st.caption("Deep Learning LSTM Sequence Model for IPL 2nd Innings Win Prediction")
+    st.caption("Deep Learning Attention-BiLSTM Model for IPL 2nd Innings Win Prediction")
 
     model, mappings = load_model_and_mappings()
     data = load_processed_data()
@@ -102,21 +101,16 @@ def main():
         ["🎯 Match Scenario Simulator", "📊 Test Dataset Trajectory", "📈 Model Performance & Info"]
     )
 
-    id_to_batting_team = {v: k for k, v in mappings["batting_team_to_id"].items()}
-    id_to_bowling_team = {v: k for k, v in mappings["bowling_team_to_id"].items()}
-    id_to_venue = {v: k for k, v in mappings["venue_to_id"].items()}
-    id_to_player = {v: k for k, v in mappings["player_to_id"].items()}
+    teams = list(mappings["batting_team_to_id"].keys())
+    venues = list(mappings["venue_to_id"].keys())
+    players = list(mappings["player_to_id"].keys())
 
     # TAB 1: MATCH SCENARIO SIMULATOR
     if app_mode == "🎯 Match Scenario Simulator":
         st.subheader("Simulate 2nd Innings Match Scenario")
-        st.write("Configure match parameters to calculate real-time win probability.")
+        st.write("Configure match parameters to calculate real-time win probability with rate & momentum features.")
 
         col1, col2, col3 = st.columns(3)
-
-        teams = list(mappings["batting_team_to_id"].keys())
-        venues = list(mappings["venue_to_id"].keys())
-        players = list(mappings["player_to_id"].keys())
 
         with col1:
             batting_team = st.selectbox("Batting Team (Chasing)", teams, index=0)
@@ -133,9 +127,13 @@ def main():
             team_balls = st.slider("Balls Bowled (Out of 120)", min_value=1, max_value=120, value=80)
             team_wicket = st.slider("Wickets Lost", min_value=0, max_value=9, value=3)
 
-        # Build 20-ball input sequence (assuming past 20 balls had uniform steady progression)
         max_runs_target = mappings["max_runs_target"]
         runs_left = max(0, target_runs - current_runs)
+        balls_left = max(1, 120 - team_balls)
+
+        rrr = (runs_left * 6.0) / balls_left
+        crr = (current_runs * 6.0) / max(1, team_balls)
+        rrr_crr_diff = rrr - crr
 
         bat_id = mappings["batting_team_to_id"].get(batting_team, 0)
         bowl_id = mappings["bowling_team_to_id"].get(bowling_team, 0)
@@ -143,20 +141,41 @@ def main():
         btr_id = mappings["player_to_id"].get(batter, 0)
         bwl_id = mappings["player_to_id"].get(bowler, 0)
 
-        # Build sequence feature array
+        # Build 20-ball input sequence (14 features per step)
         seq_features = []
         start_balls = max(1, team_balls - 19)
-        runs_step = (current_runs / max(1, team_balls))
+        runs_step = current_runs / max(1, team_balls)
 
         for b in range(start_balls, team_balls + 1):
-            r_left = max(0, target_runs - int(b * runs_step)) / max_runs_target
+            r_left = max(0, target_runs - int(b * runs_step))
+            b_left = max(1, 120 - b)
+            b_rrr = (r_left * 6.0) / b_left
+            b_crr = (int(b * runs_step) * 6.0) / b
+            b_diff = b_rrr - b_crr
+
+            r_left_norm = r_left / max_runs_target
             b_norm = b / 120.0
             w_norm = team_wicket / 10.0
-            seq_features.append([bat_id, bowl_id, ven_id, btr_id, bwl_id, r_left, b_norm, w_norm])
+            rrr_norm = min(2.0, max(0.0, b_rrr / 24.0))
+            crr_norm = min(2.0, max(0.0, b_crr / 24.0))
+            diff_norm = min(2.0, max(-2.0, b_diff / 24.0))
+            w_left_norm = (10 - team_wicket) / 10.0
+            r_12_norm = min(1.0, (runs_step * 12) / 36.0)
+            w_12_norm = 0.0
+
+            seq_features.append([
+                bat_id, bowl_id, ven_id, btr_id, bwl_id,
+                r_left_norm, b_norm, w_norm, rrr_norm, crr_norm,
+                diff_norm, w_left_norm, r_12_norm, w_12_norm
+            ])
 
         # Pad sequence to 20 balls if needed
         while len(seq_features) < 20:
-            seq_features.insert(0, [bat_id, bowl_id, ven_id, btr_id, bwl_id, target_runs / max_runs_target, 0.0, 0.0])
+            seq_features.insert(0, [
+                bat_id, bowl_id, ven_id, btr_id, bwl_id,
+                target_runs / max_runs_target, 0.0, 0.0, target_runs * 6.0 / 2880.0, 0.0,
+                target_runs * 6.0 / 2880.0, 1.0, 0.0, 0.0
+            ])
 
         x_input = torch.tensor(np.array([seq_features]), dtype=torch.float32)
 
@@ -168,15 +187,16 @@ def main():
         st.markdown("---")
         st.subheader("Prediction Results")
 
-        res_col1, res_col2, res_col3 = st.columns(3)
+        res_col1, res_col2, res_col3, res_col4 = st.columns(4)
 
         with res_col1:
             st.metric("Win Probability", f"{win_pct:.1f}%")
         with res_col2:
-            st.metric("Runs Required", f"{runs_left} runs off {120 - team_balls} balls")
+            st.metric("Runs Required", f"{runs_left} off {balls_left} balls")
         with res_col3:
-            req_rr = (runs_left / ((120 - team_balls) / 6.0)) if (120 - team_balls) > 0 else 0
-            st.metric("Required Run Rate (RRR)", f"{req_rr:.2f}")
+            st.metric("Required Run Rate (RRR)", f"{rrr:.2f}")
+        with res_col4:
+            st.metric("Current Run Rate (CRR)", f"{crr:.2f}")
 
         st.progress(min(1.0, max(0.0, win_prob)))
 
@@ -198,7 +218,7 @@ def main():
 
         sample_idx = st.number_input("Select Test Sample Index:", min_value=0, max_value=len(X_test)-1, value=0)
 
-        sample_seq = X_test[sample_idx]  # Shape: (20, 8)
+        sample_seq = X_test[sample_idx]  # Shape: (20, 14)
         y_true = int(y_test[sample_idx])
 
         # Evaluate model probability across partial sequence windows (1 to 20 balls)
@@ -250,10 +270,16 @@ def main():
         st.markdown("### 🏗️ Network Architecture")
         st.code("""
 LSTMWinPredictor(
-  (lstm): LSTM(input_size=8, hidden_size=64, batch_first=True)
-  (dropout): Dropout(p=0.2)
-  (fc): Linear(in_features=64, out_features=1)
-  (sigmoid): Sigmoid()
+  (player_embed): Embedding(769, 24, padding_idx=0)
+  (team_embed): Embedding(21, 12, padding_idx=0)
+  (venue_embed): Embedding(61, 12, padding_idx=0)
+  (lstm): LSTM(93, 64, num_layers=2, batch_first=True, dropout=0.3, bidirectional=True)
+  (attention): AdditiveAttention(128)
+  (fc): Sequential(
+    Linear(in_features=128, out_features=64), ReLU(), Dropout(0.3),
+    Linear(in_features=64, out_features=32), ReLU(), Dropout(0.3),
+    Linear(in_features=32, out_features=1), Sigmoid()
+  )
 )
         """, language="python")
 
