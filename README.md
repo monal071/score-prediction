@@ -5,37 +5,38 @@
 ![Streamlit](https://img.shields.io/badge/Streamlit-Web%20App-FF4B4B?style=for-the-badge&logo=streamlit)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-A state-of-the-art Deep Learning pipeline for predicting Indian Premier League (IPL) **2nd Innings Win Probability** using Long Short-Term Memory (LSTM) recurrent neural networks.
+A state-of-the-art Deep Learning pipeline for predicting Indian Premier League (IPL) **2nd Innings Win Probability** using Long Short-Term Memory (LSTM) recurrent neural networks, trained on complete IPL ball-by-ball match data (2008 – 2024/2025).
 
 ---
 
 ## 📊 Statistical Overview & Empirical Performance
 
-### 📈 Dataset Statistics (`IPL.csv`)
+### 📈 Full Dataset Statistics (`IPL.csv` 2008–2025)
 
 | Metric | Empirical Value | Description |
 | :--- | :---: | :--- |
-| **Total Ball-by-Ball Records** | **10,059** | Complete 2nd innings delivery records |
-| **Total Matches** | **100** | Unique match IDs processed |
+| **Total Ball-by-Ball Records** | **278,205** | Complete delivery records across all seasons |
+| **Total Matches** | **1,169** | Unique match IDs processed |
 | **Sequence Length** | **20** | Sliding ball-by-ball window per sample |
-| **Training Sequences (`X_train`)** | **6,545** | 80% train split sequence tensor shape `(6545, 20, 8)` |
-| **Testing Sequences (`X_test`)** | **1,614** | 20% test split sequence tensor shape `(1614, 20, 8)` |
-| **Unique Teams** | **8** | Franchise teams encoded |
-| **Unique Venues** | **5** | Stadiums & grounds encoded |
-| **Target Score Range** | **140 – 210** | 1st innings target score distribution (Mean: `174.25`) |
+| **Training Sequences (`X_train`)** | **89,511** | 80% train split sequence tensor shape `(89511, 20, 8)` |
+| **Testing Sequences (`X_test`)** | **22,302** | 20% test split sequence tensor shape `(22302, 20, 8)` |
+| **Unique Players Encoded** | **767** | Batters & bowlers mapped to integer IDs |
+| **Unique Teams Encoded** | **19** | Franchise teams mapped |
+| **Unique Venues Encoded** | **59** | Stadiums & grounds mapped |
+| **Max Target Score** | **288** | Highest target score in dataset |
 
 ---
 
-### 🎯 Model Evaluation Metrics
+### 🎯 Full Dataset Model Evaluation Metrics
 
 | Metric | Score | Detail |
 | :--- | :---: | :--- |
-| **Test Accuracy** | **53.66%** | Overall correct win/loss classifications |
-| **ROC-AUC Score** | **0.6473** | Area Under Receiver Operating Characteristic Curve |
-| **Precision** | **0.5725** | Positive prediction value |
-| **Recall** | **0.6036** | True positive rate |
-| **F1 Score** | **0.5877** | Harmonic mean of precision and recall |
-| **Test Loss** | **1.7158** | Binary Cross-Entropy Loss |
+| **Test Accuracy** | **75.60%** | Overall correct win/loss predictions on 22,302 test samples |
+| **ROC-AUC Score** | **0.8378** | High discriminative capability across confidence thresholds |
+| **Precision** | **0.6933** | Positive predictive accuracy |
+| **Recall** | **0.8647** | Sensitivity to winning chase conditions |
+| **F1 Score** | **0.7696** | Balanced metric across precision & recall |
+| **Test Loss** | **0.5993** | Binary Cross-Entropy Loss |
 
 ---
 
@@ -70,7 +71,7 @@ graph TD
 
 ```text
 .
-├── IPL.csv                  # Kaggle IPL ball-by-ball dataset (root directory)
+├── IPL.csv                  # Kaggle IPL ball-by-ball dataset (2008–2025)
 ├── data_preprocessing.py    # Feature engineering, sliding-window sequence creation, mapping serialization
 ├── model.py                 # PyTorch LSTMWinPredictor architecture definition
 ├── train.py                 # Model training loop with validation & checkpointing

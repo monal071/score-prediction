@@ -154,7 +154,7 @@ def main():
             "  python data_preprocessing.py --kaggle chaitu20/ipl-dataset2008-2025"
         )
 
-    df_raw = pd.read_csv(dataset_path)
+    df_raw = pd.read_csv(dataset_path, low_memory=False)
     df_trimmed = trim_data(df_raw)
     df_processed = normalize_and_encode(df_trimmed, df_raw)
 
