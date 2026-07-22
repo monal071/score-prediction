@@ -9,6 +9,36 @@ A state-of-the-art Deep Learning pipeline for predicting Indian Premier League (
 
 ---
 
+## 📊 Statistical Overview & Empirical Performance
+
+### 📈 Dataset Statistics (`IPL.csv`)
+
+| Metric | Empirical Value | Description |
+| :--- | :---: | :--- |
+| **Total Ball-by-Ball Records** | **10,059** | Complete 2nd innings delivery records |
+| **Total Matches** | **100** | Unique match IDs processed |
+| **Sequence Length** | **20** | Sliding ball-by-ball window per sample |
+| **Training Sequences (`X_train`)** | **6,545** | 80% train split sequence tensor shape `(6545, 20, 8)` |
+| **Testing Sequences (`X_test`)** | **1,614** | 20% test split sequence tensor shape `(1614, 20, 8)` |
+| **Unique Teams** | **8** | Franchise teams encoded |
+| **Unique Venues** | **5** | Stadiums & grounds encoded |
+| **Target Score Range** | **140 – 210** | 1st innings target score distribution (Mean: `174.25`) |
+
+---
+
+### 🎯 Model Evaluation Metrics
+
+| Metric | Score | Detail |
+| :--- | :---: | :--- |
+| **Test Accuracy** | **53.66%** | Overall correct win/loss classifications |
+| **ROC-AUC Score** | **0.6473** | Area Under Receiver Operating Characteristic Curve |
+| **Precision** | **0.5725** | Positive prediction value |
+| **Recall** | **0.6036** | True positive rate |
+| **F1 Score** | **0.5877** | Harmonic mean of precision and recall |
+| **Test Loss** | **1.7158** | Binary Cross-Entropy Loss |
+
+---
+
 ## 🌟 Features
 
 - **LSTM Sequence Modeling**: Captures ball-by-ball dynamic match trends over 20-ball sequence windows.
@@ -128,7 +158,6 @@ Features in the Streamlit app:
 | **Sequence Length** | 20 consecutive balls |
 | **Input Features (8)** | `batting_team`, `bowling_team`, `venue`, `batter`, `bowler`, `runs_left`, `team_balls`, `team_wicket` |
 | **Hidden Dimensions** | 64 LSTM units |
-| **Activation** | Sigmoid output (0.0 to 1.0 probability) |
 | **Optimizer** | Adam (`lr=0.001`) |
 | **Loss Function** | Binary Cross Entropy (`BCELoss`) |
 
